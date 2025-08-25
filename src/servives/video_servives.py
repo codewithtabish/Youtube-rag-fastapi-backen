@@ -15,12 +15,20 @@ from schema.video import VideoRequest
 from core import llm, output_parser
 from utils import extract_video_id
 import openai
+import requests
 
 
 def summarize_video_service(request: VideoRequest) -> Response:
     try:
         video_url = request.video_url
         target_language = request.language or "en"
+
+        # Create a session with your phone proxy
+        session = requests.Session()
+        session.proxies.update({
+            'http': 'http://192.168.10.2:8080',
+            'https': 'http://192.168.10.2:8080'
+        })
 
         # 1. Extract video ID
         video_id = extract_video_id(video_url)
@@ -31,10 +39,11 @@ def summarize_video_service(request: VideoRequest) -> Response:
                 media_type="application/json",
             )
 
-        transcript_api: YouTubeTranscriptApi = YouTubeTranscriptApi()
+        # 2. Initialize YouTubeTranscriptApi with proxy
+        transcript_api: YouTubeTranscriptApi = YouTubeTranscriptApi(http_client=session)
 
         try:
-            # 2. Get transcript list
+            # 3. Get transcript list
             transcript_list: TranscriptList = transcript_api.list(video_id)
 
             # Debugging: print available transcripts
@@ -46,7 +55,7 @@ def summarize_video_service(request: VideoRequest) -> Response:
                     "Translation Available", t.translation_languages
                 )
 
-            # ✅ 3. Always just pick the first available transcript
+            # 4. Pick the first available transcript
             transcript_data: Transcript = next(iter(transcript_list), None)
             if not transcript_data:
                 return Response(
@@ -55,7 +64,7 @@ def summarize_video_service(request: VideoRequest) -> Response:
                     media_type="application/json",
                 )
 
-            # 4. Fetch transcript data
+            # 5. Fetch transcript data
             snippets = transcript_data.fetch()
             full_transcript_data = " ".join([single.text for single in snippets])
 
@@ -67,14 +76,13 @@ def summarize_video_service(request: VideoRequest) -> Response:
                 )
 
         except (NoTranscriptFound, TranscriptsDisabled):
-            # ✅ Handle case when no transcript is available at all
             return Response(
                 content=json.dumps({"error": "No subtitles/transcript available for this video"}),
                 status_code=status.HTTP_404_NOT_FOUND,
                 media_type="application/json",
             )
 
-        # 5. Summarize with LLM
+        # 6. Summarize with LLM
         try:
             prompt = PromptTemplate(
                 template="Summarize the following transcript into {target_language}: \n\n{transcript}",
@@ -93,7 +101,6 @@ def summarize_video_service(request: VideoRequest) -> Response:
                 media_type="application/json",
             )
 
-        # ✅ OpenAI / LLM Specific Error Handling
         except openai.AuthenticationError as auth_error:
             return Response(
                 content=json.dumps({
@@ -140,6 +147,35 @@ def summarize_video_service(request: VideoRequest) -> Response:
                 media_type="application/json",
             )
 
+    # 7. Proxy / Network related exceptions
+    except requests.exceptions.ProxyError as proxy_err:
+        return Response(
+            content=json.dumps({
+                "error": "Proxy error occurred",
+                "details": str(proxy_err) or "Could not connect through the proxy."
+            }),
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            media_type="application/json",
+        )
+    except requests.exceptions.ConnectionError as conn_err:
+        return Response(
+            content=json.dumps({
+                "error": "Connection error occurred",
+                "details": str(conn_err) or "Failed to connect to the target server."
+            }),
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            media_type="application/json",
+        )
+    except requests.exceptions.Timeout as timeout_err:
+        return Response(
+            content=json.dumps({
+                "error": "Request timed out",
+                "details": str(timeout_err) or "The request through the proxy took too long."
+            }),
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            media_type="application/json",
+        )
+
     except ValidationError as e:
         return Response(
             content=json.dumps({"error": e.errors()}),
@@ -148,7 +184,7 @@ def summarize_video_service(request: VideoRequest) -> Response:
         )
     except Exception as e:
         return Response(
-            content=json.dumps({"error": str(e) ,"issue":"its network problem"}),
+            content=json.dumps({"error": str(e), "issue": "its network problem"}),
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             media_type="application/json",
         )
