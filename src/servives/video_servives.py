@@ -23,11 +23,14 @@ def summarize_video_service(request: VideoRequest) -> Response:
         video_url = request.video_url
         target_language = request.language or "en"
 
-        # Create a session with your phone proxy
+        # ✅ Setup session with DataImpulse Residential Proxy
         session = requests.Session()
+        proxy_auth = "dda889c3f332b8baf753:095eda3b8e975fde"
+        proxy_host = "gw.dataimpulse.com:823"
+
         session.proxies.update({
-            'http': 'http://192.168.10.2:8080',
-            'https': 'http://192.168.10.2:8080'
+            "http": f"http://{proxy_auth}@{proxy_host}",
+            "https": f"http://{proxy_auth}@{proxy_host}",
         })
 
         # 1. Extract video ID
@@ -39,14 +42,12 @@ def summarize_video_service(request: VideoRequest) -> Response:
                 media_type="application/json",
             )
 
-        # 2. Initialize YouTubeTranscriptApi with proxy
-        transcript_api: YouTubeTranscriptApi = YouTubeTranscriptApi(http_client=session)
+        # 2. Get transcript with proxy
+        transcript_api: YouTubeTranscriptApi = YouTubeTranscriptApi()
 
         try:
-            # 3. Get transcript list
             transcript_list: TranscriptList = transcript_api.list(video_id)
 
-            # Debugging: print available transcripts
             for t in transcript_list:
                 print(
                     "The language is ", t.language,
@@ -55,7 +56,6 @@ def summarize_video_service(request: VideoRequest) -> Response:
                     "Translation Available", t.translation_languages
                 )
 
-            # 4. Pick the first available transcript
             transcript_data: Transcript = next(iter(transcript_list), None)
             if not transcript_data:
                 return Response(
@@ -64,7 +64,6 @@ def summarize_video_service(request: VideoRequest) -> Response:
                     media_type="application/json",
                 )
 
-            # 5. Fetch transcript data
             snippets = transcript_data.fetch()
             full_transcript_data = " ".join([single.text for single in snippets])
 
@@ -82,7 +81,7 @@ def summarize_video_service(request: VideoRequest) -> Response:
                 media_type="application/json",
             )
 
-        # 6. Summarize with LLM
+        # 3. Summarize with LLM
         try:
             prompt = PromptTemplate(
                 template="Summarize the following transcript into {target_language}: \n\n{transcript}",
@@ -147,7 +146,6 @@ def summarize_video_service(request: VideoRequest) -> Response:
                 media_type="application/json",
             )
 
-    # 7. Proxy / Network related exceptions
     except requests.exceptions.ProxyError as proxy_err:
         return Response(
             content=json.dumps({

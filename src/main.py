@@ -28,4 +28,8 @@ def health_check():
     )
     
 
-app.include_router(router=video_router, prefix="/video", tags=["Video"])    
+app.include_router(router=video_router, prefix="/api/v1/video", tags=["Video"])    
+
+
+
+# https://app.dataimpulse.com/plans/create-new
