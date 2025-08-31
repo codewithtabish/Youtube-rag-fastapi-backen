@@ -1,6 +1,7 @@
 # src/services/video_services.py
 
 import json
+from langchain_openai import ChatOpenAI
 from fastapi import Response, status
 from pydantic import ValidationError
 from langchain_core.prompts import PromptTemplate
@@ -11,11 +12,7 @@ from youtube_transcript_api import (
     NoTranscriptFound,
     TranscriptsDisabled,
 )
-# ❌ ProxyConfig is NOT available in v1.2.2 → use requests.Session instead
-# from youtube_transcript_api import ProxyConfig
-
 from schema.video import VideoRequest
-from core import llm, output_parser
 from utils import extract_video_id
 import openai
 import requests
@@ -30,7 +27,6 @@ def summarize_video_service(request: VideoRequest) -> Response:
         session = requests.Session()
         proxy_auth = "dda889c3f332b8baf753:095eda3b8e975fde"
         proxy_host = "gw.dataimpulse.com:823"
-
         proxy_url = f"http://{proxy_auth}@{proxy_host}"
 
         session.proxies.update({
@@ -48,21 +44,12 @@ def summarize_video_service(request: VideoRequest) -> Response:
                 media_type="application/json",
             )
 
-        # 2. Get transcript with proxy-enabled session
+        # 2. Get transcript
         transcript_api: YouTubeTranscriptApi = YouTubeTranscriptApi(http_client=session)
-
         try:
             transcript_list: TranscriptList = transcript_api.list(video_id)
-
-            for t in transcript_list:
-                print(
-                    "The language is ", t.language,
-                    "The language code is ", t.language_code,
-                    "Auto Generated", t.is_generated,
-                    "Translation Available", t.translation_languages
-                )
-
             transcript_data: Transcript = next(iter(transcript_list), None)
+
             if not transcript_data:
                 return Response(
                     content=json.dumps({"error": "No transcript found"}),
@@ -87,21 +74,39 @@ def summarize_video_service(request: VideoRequest) -> Response:
                 media_type="application/json",
             )
 
-        # 3. Summarize with LLM
+        # 3. Summarize with ChatOpenAI GPT-5
         try:
-            prompt = PromptTemplate(
-                template="Summarize the following transcript into {target_language}: \n\n{transcript}",
-                input_variables=["transcript", "target_language"]
+            llm = ChatOpenAI(
+                model="gpt-5",
+                temperature=0.5,
             )
-            chain = prompt | llm | output_parser
 
+            # 🔹 Professional structured format with headings & paragraphs
+            prompt = PromptTemplate(
+                template=(
+                    "You are a professional summarizer.\n\n"
+                    "Rules:\n"
+                    "1. Always write in {target_language}.\n"
+                    "2. Structure the summary with clear headings and paragraphs.\n"
+                    "3. Format:\n"
+                    "   - Title (big heading)\n"
+                    "   - Key Highlights (bullet points)\n"
+                    "   - Detailed Analysis (multiple paragraphs under sub-headings)\n"
+                    "4. Ensure tone is professional, concise, and easy to read.\n\n"
+                    "Transcript:\n{transcript}\n\n"
+                    "Now generate the professional summary."
+                ),
+                input_variables=["transcript", "target_language"],
+            )
+
+            chain = prompt | llm
             response = chain.invoke({
                 "transcript": full_transcript_data,
-                "target_language": target_language
+                "target_language": target_language,
             })
 
             return Response(
-                content=json.dumps({"summarize transcript": response}),
+                content=json.dumps({"summarize_transcript": response.content}),
                 status_code=status.HTTP_200_OK,
                 media_type="application/json",
             )
@@ -179,7 +184,6 @@ def summarize_video_service(request: VideoRequest) -> Response:
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             media_type="application/json",
         )
-
     except ValidationError as e:
         return Response(
             content=json.dumps({"error": e.errors()}),
