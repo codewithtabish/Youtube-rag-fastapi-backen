@@ -11,6 +11,9 @@ from youtube_transcript_api import (
     NoTranscriptFound,
     TranscriptsDisabled,
 )
+# ❌ ProxyConfig is NOT available in v1.2.2 → use requests.Session instead
+# from youtube_transcript_api import ProxyConfig
+
 from schema.video import VideoRequest
 from core import llm, output_parser
 from utils import extract_video_id
@@ -28,10 +31,13 @@ def summarize_video_service(request: VideoRequest) -> Response:
         proxy_auth = "dda889c3f332b8baf753:095eda3b8e975fde"
         proxy_host = "gw.dataimpulse.com:823"
 
+        proxy_url = f"http://{proxy_auth}@{proxy_host}"
+
         session.proxies.update({
-            "http": f"http://{proxy_auth}@{proxy_host}",
-            "https": f"http://{proxy_auth}@{proxy_host}",
+            "http": proxy_url,
+            "https": proxy_url,
         })
+        session.timeout = 20  # optional default timeout
 
         # 1. Extract video ID
         video_id = extract_video_id(video_url)
@@ -42,8 +48,8 @@ def summarize_video_service(request: VideoRequest) -> Response:
                 media_type="application/json",
             )
 
-        # 2. Get transcript with proxy
-        transcript_api: YouTubeTranscriptApi = YouTubeTranscriptApi()
+        # 2. Get transcript with proxy-enabled session
+        transcript_api: YouTubeTranscriptApi = YouTubeTranscriptApi(http_client=session)
 
         try:
             transcript_list: TranscriptList = transcript_api.list(video_id)
